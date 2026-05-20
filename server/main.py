@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+import uuid
+from datetime import datetime, timedelta
+
+restocking_orders_store: list = []
+tasks_store: list = []
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -119,6 +124,27 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockingItem(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_cost: float
+    item_cost: float
+
+class CreateRestockingOrderRequest(BaseModel):
+    items: List[RestockingItem]
+    total_value: float
+
+class RestockingOrder(BaseModel):
+    id: str
+    order_number: str
+    items: List[RestockingItem]
+    status: str
+    submitted_date: str
+    expected_delivery: str
+    lead_time_days: int
+    total_value: float
 
 # API endpoints
 @app.get("/")
@@ -303,6 +329,68 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+@app.post("/api/restocking-orders", response_model=RestockingOrder, status_code=201)
+def create_restocking_order(request: CreateRestockingOrderRequest):
+    """Create a new restocking order"""
+    now = datetime.utcnow()
+    order = {
+        "id": str(uuid.uuid4()),
+        "order_number": f"RST-{now.strftime('%Y')}-{len(restocking_orders_store) + 1:04d}",
+        "items": [item.dict() for item in request.items],
+        "status": "Submitted",
+        "submitted_date": now.isoformat(),
+        "expected_delivery": (now + timedelta(days=14)).isoformat(),
+        "lead_time_days": 14,
+        "total_value": request.total_value,
+    }
+    restocking_orders_store.append(order)
+    return order
+
+@app.get("/api/restocking-orders", response_model=List[RestockingOrder])
+def get_restocking_orders():
+    """Get all submitted restocking orders"""
+    return restocking_orders_store
+
+class Task(BaseModel):
+    id: str
+    title: str
+    status: str
+    created_at: str
+
+class CreateTaskRequest(BaseModel):
+    title: str
+
+@app.get("/api/tasks", response_model=List[Task])
+def get_tasks():
+    return tasks_store
+
+@app.post("/api/tasks", response_model=Task, status_code=201)
+def create_task(request: CreateTaskRequest):
+    task = {
+        "id": str(uuid.uuid4()),
+        "title": request.title,
+        "status": "pending",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    tasks_store.append(task)
+    return task
+
+@app.delete("/api/tasks/{task_id}", status_code=204)
+def delete_task(task_id: str):
+    global tasks_store
+    task = next((t for t in tasks_store if t["id"] == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    tasks_store = [t for t in tasks_store if t["id"] != task_id]
+
+@app.patch("/api/tasks/{task_id}", response_model=Task)
+def toggle_task(task_id: str):
+    task = next((t for t in tasks_store if t["id"] == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task["status"] = "completed" if task["status"] == "pending" else "pending"
+    return task
 
 if __name__ == "__main__":
     import uvicorn
